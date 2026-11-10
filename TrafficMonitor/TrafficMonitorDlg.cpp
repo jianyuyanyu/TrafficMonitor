@@ -1600,23 +1600,8 @@ UINT CTrafficMonitorDlg::MonitorThreadCallback(LPVOID dwUser)
         //获取一次监控数据
         if (pThis->m_monitor_data_required)
         {
-            if (pThis->m_resume_reinitialize.exchange(false))
-            {
-                pThis->IniConnection();
-                bool operational = false;
-                for (size_t i = 0; i < pThis->m_connections.size(); ++i)
-                {
-                    if (pThis->GetConnectIfTable(static_cast<int>(i)).dwOperStatus == IF_OPER_STATUS_OPERATIONAL)
-                    {
-                        operational = true;
-                        break;
-                    }
-                }
-                pThis->m_resume_adapter_operational = operational;
-                pThis->m_connection_change_flag = true;
-                pThis->m_last_in_bytes = 0;
-                pThis->m_last_out_bytes = 0;
-            }
+
+            pThis->m_resume_reinitialize.store(false);
             pThis->DoMonitorAcquisition();
             //获取到监控数据后重置flag
             pThis->m_monitor_data_required = false;
@@ -1651,6 +1636,7 @@ void CTrafficMonitorDlg::ExitMonitorThread()
 
 void CTrafficMonitorDlg::OnTimer(UINT_PTR nIDEvent)
 {
+   /*
     if (nIDEvent == INIT_CONNECT_TIMER)
     {
         const bool operational = m_resume_adapter_operational.load();
@@ -1664,6 +1650,43 @@ void CTrafficMonitorDlg::OnTimer(UINT_PTR nIDEvent)
             m_resume_reinitialize = true;
             m_monitor_data_required = true;
         }
+        return;
+    }
+    */
+    if (nIDEvent == INIT_CONNECT_TIMER)
+    {
+    // 在 UI 线程枚举网卡，避免跨线程访问 m_connections
+    if (m_resume_reinitialize.exchange(false))
+    {
+        IniConnection();
+        bool operational = false;
+        for (size_t i = 0; i < m_connections.size(); ++i)
+        {
+            if (GetConnectIfTable(static_cast<int>(i)).dwOperStatus == IF_OPER_STATUS_OPERATIONAL)
+            {
+                operational = true;
+                break;
+            }
+        }
+        m_resume_adapter_operational = operational;
+        m_connection_change_flag = true;
+        m_last_in_bytes = 0;
+        m_last_out_bytes = 0;
+        // 恢复原提交中被删除的日志功能
+        CString info = CCommon::LoadTextFormat(IDS_RESTORE_FROM_SLEEP_LOG, { m_restart_cnt });
+        CCommon::WriteLog(info, theApp.m_log_path.c_str());
+    }
+    if (m_resume_adapter_operational.load() || ++m_resume_retry_count > MAX_RESUME_RETRY_COUNT)
+    {
+        KillTimer(INIT_CONNECT_TIMER);
+        m_resume_retry_count = 0;
+        m_resume_pending = false;
+    }
+    else
+    {
+        m_resume_reinitialize = true;
+        m_monitor_data_required = true;
+    }
         return;
     }
     // TODO: 在此添加消息处理程序代码和/或调用默认值
@@ -3126,6 +3149,7 @@ UINT CTrafficMonitorDlg::OnPowerBroadcast(UINT nPowerEvent, LPARAM nEventData)
     {
         KillTimer(INIT_CONNECT_TIMER);
         m_resume_retry_count = 0;
+        m_resume_pending = false;
         KillTimer(MONITOR_TIMER);
         m_monitor_data_required = false;
     }
@@ -3133,15 +3157,19 @@ UINT CTrafficMonitorDlg::OnPowerBroadcast(UINT nPowerEvent, LPARAM nEventData)
              nPowerEvent == PBT_APMRESUMESUSPEND ||
              nPowerEvent == PBT_APMRESUMECRITICAL)
     {
-        if (m_resume_retry_count == 0)
+        //if (m_resume_retry_count == 0)
+        if (!m_resume_pending)
         {
-            m_resume_retry_count = 1;
+            //m_resume_retry_count = 1;
+            m_resume_pending = true;
+            m_resume_retry_count = 0;
             m_resume_adapter_operational = false;
             m_resume_reinitialize = true;
             m_monitor_data_required = true;
             SetTimer(MONITOR_TIMER, theApp.m_general_data.monitor_time_span, nullptr);
             KillTimer(INIT_CONNECT_TIMER);
-            SetTimer(INIT_CONNECT_TIMER, 10000, nullptr);
+            //SetTimer(INIT_CONNECT_TIMER, 10000, nullptr);
+            SetTimer(INIT_CONNECT_TIMER, RESUME_RETRY_INTERVAL_MS, nullptr);
         }
     }
     return CDialog::OnPowerBroadcast(nPowerEvent, nEventData);
