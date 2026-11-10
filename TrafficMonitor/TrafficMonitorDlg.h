@@ -3,6 +3,7 @@
 //
 
 #pragma once
+#include <atomic>
 #pragma comment (lib, "iphlpapi.lib")
 
 #include "NetworkInfoDlg.h"
@@ -58,7 +59,7 @@ protected:
     CTaskBarDlg* m_tBarDlg{};     //任务栏窗口的指针
 
     vector<NetWorkConection> m_connections; //保存获取到的要显示到“选择网卡”菜单项中的所有网络连接
-    MIB_IFTABLE* m_pIfTable;
+    MIB_IFTABLE* m_pIfTable{};
     DWORD m_dwSize{};	//m_pIfTable的大小
     int m_connection_selected{ 0 }; //要显示流量的连接的序号
     unsigned __int64 m_in_bytes{};        //当前已接收的字节数
@@ -126,14 +127,24 @@ protected:
     bool m_menu_popuped{ false };               //指示当前是否有菜单处于弹出状态
 
     HDC m_desktop_dc;
-
     string m_connection_name_preferd{ theApp.m_cfg_data.m_connection_name };          //保存用户手动选择的网络连接名称
 
     void DoMonitorAcquisition();    //获取一次监控信息
     static UINT MonitorThreadCallback(LPVOID dwUser);   //获取监控信息的线程函数
-    bool m_monitor_data_required{ false };          //线程中需要获取监控数据标志，当需要获取监控数据时置为true，获取到一次监控数据时置为false
+    std::atomic<bool> m_resume_reinitialize{ false };
+    std::atomic<bool> m_resume_adapter_operational{ false };
+    bool m_resume_pending{ false }; //是否正处于休眠/睡眠后的恢复流程
+    unsigned int m_resume_retry_count{};
+    //bool m_monitor_data_required{ false };          //线程中需要获取监控数据标志，当需要获取监控数据时置为true，获取到一次监控数据时置为false
+    std::atomic<bool> m_monitor_data_required{ false }; //线程中需要获取监控数据标志，主线程与监控线程共用，必须原子
     bool m_is_thread_exit{ false }; //线程退出标志
     CEvent m_threadExitEvent;       //用于通知主线程工作线程已退出
+
+   // 恢复流程相关常量（避免魔数散落在 .cpp 里）
+    static constexpr ULONGLONG SLEEP_ELAPSED_THRESHOLD_MS = 30000;  // 超过该间隔认为系统经历了睡眠/休眠
+    static constexpr UINT RESUME_RETRY_INTERVAL_MS = 10000;         // 恢复重试定时器间隔
+    static constexpr UINT MAX_RESUME_RETRY_COUNT = 30;              // 恢复期间最大重试次数
+    static constexpr int FALLBACK_TIME_SPAN_MS = 1000;              // time_span 兜底值
 public:
     void ExitMonitorThread();       //停止监控线程
 
